@@ -1,0 +1,11 @@
+# 运行产物与缓存
+output/
+logs/
+__pycache__/
+*.pyc
+.DS_Store
+
+# 本地环境
+.venv/
+venv/
+.env

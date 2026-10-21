@@ -1,0 +1,11 @@
+funasr>=1.0.0
+modelscope
+torch>=2.0.0
+torchaudio
+openai-whisper
+librosa>=0.10.0
+soundfile
+openai>=1.0.0
+pyyaml
+numpy
+tqdm

@@ -1,0 +1,104 @@
+# Xuke-Universe Clip Factory — 配置文件
+
+# === 路径 ===
+paths:
+  project_root: "/Users/pan/Downloads/web3/Xuke-Universe/clip-factory"
+  source_video_dir: "/Users/pan/Downloads/web3/Xuke-Skill"  # 直播录像所在目录
+  output_dir: "/Users/pan/Downloads/web3/Xuke-Universe/clip-factory/output"
+  logs_dir: "/Users/pan/Downloads/web3/Xuke-Universe/clip-factory/logs"
+  persona_file: "/Users/pan/Downloads/web3/Xuke-Skill/xuke-skill.md"
+
+# === 转录引擎 ===
+transcription:
+  engine: "whisper"        # "whisper" (已安装) 或 "funasr" (需额外安装)
+  whisper_model: "medium"  # tiny / base / small / medium / large
+  language: "zh"
+  device: "cpu"            # cpu / cuda / mps (Apple Silicon)
+
+# === 高光检测 ===
+highlight:
+  llm_provider: "openai"            # openai / anthropic / local
+  llm_model: "gpt-4.1-mini"        # 便宜快速，足够分析转录文本
+  llm_api_key_env: "OPENAI_API_KEY" # 从环境变量读取 API Key
+  chunk_minutes: 10                  # 每次发给 LLM 的转录长度（分钟）
+  min_total_score: 30                # 最低总分阈值（满分50）
+  min_clip_seconds: 15               # 最短切片时长
+  max_clip_seconds: 180              # 最长切片时长（3分钟）
+  audio_energy_weight: 0.3           # 音频能量在综合评分中的权重
+
+# === 剪辑 ===
+clipping:
+  padding_before: 2.0     # 切片前多留几秒（避免开头太突兀）
+  padding_after: 1.5      # 切片后多留几秒
+  fade_in: 0.5            # 淡入秒数
+  fade_out: 0.5           # 淡出秒数
+  video_codec: "libx264"
+  video_crf: 20
+  audio_codec: "aac"
+  audio_bitrate: "128k"
+
+# === 字幕 ===
+subtitle:
+  font_name: "PingFang SC"    # macOS 系统中文字体
+  font_size: 22
+  font_color: "&H00FFFFFF"    # 白色 (ASS 格式 AABBGGRR)
+  outline_color: "&H00000000" # 黑色描边
+  outline_width: 2
+  position: "bottom"          # bottom / center
+  margin_bottom: 40
+
+# === 文案生成 ===
+copywriting:
+  llm_provider: "openai"
+  llm_model: "gpt-4.1-mini"
+  llm_api_key_env: "OPENAI_API_KEY"
+
+# === 多平台输出 ===
+platforms:
+  shipin_hao:                 # 视频号
+    aspect: "9:16"
+    width: 1080
+    height: 1920
+    max_duration: 3600        # 60分钟
+    max_size_mb: 2048
+    enabled: true
+
+  douyin:                     # 抖音
+    aspect: "9:16"
+    width: 1080
+    height: 1920
+    max_duration: 1800        # 30分钟
+    max_size_mb: 4096
+    enabled: true
+
+  xiaohongshu:                # 小红书
+    aspect: "3:4"
+    width: 1080
+    height: 1440
+    max_duration: 900         # 15分钟
+    max_size_mb: 10240
+    enabled: true
+
+  x_twitter:                  # X/Twitter
+    aspect: "16:9"
+    width: 1920
+    height: 1080
+    max_duration: 140         # Free: 2:20
+    max_size_mb: 512
+    enabled: false            # 先不开
+
+  bilibili:                   # B站
+    aspect: "16:9"
+    width: 1920
+    height: 1080
+    max_duration: 0           # 无限
+    max_size_mb: 8192
+    enabled: false
+
+# === OBS 自动录制 ===
+obs:
+  host: "localhost"
+  port: 4455
+  password: ""               # OBS WebSocket 密码，留空表示无密码
+  recording_format: "mp4"
+  recording_quality: "high"  # high / medium
