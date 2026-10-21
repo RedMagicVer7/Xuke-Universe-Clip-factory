@@ -1,6 +1,6 @@
 """
 Xuke Clip Factory — FFmpeg 自动剪辑模块
-负责：视频切割、字幕生成与烧录、淡入淡出、画面裁切
+负责：视频切割、字幕生成与烧录、淡入淡出、画面裁切、封面生成
 """
 
 import os
@@ -331,6 +331,136 @@ def _format_time(seconds: float) -> str:
 
 
 # ──────────────────────────────────────────────
+# 封面生成 (参考 AutoClip: 切片帧 + 标题大字 + 头像角标)
+# ──────────────────────────────────────────────
+
+# macOS / Linux 常见中文字体路径（drawtext 需要显式字体文件）
+_FONT_CANDIDATES = [
+    "/System/Library/Fonts/PingFang.ttc",
+    "/System/Library/Fonts/Hiragino Sans GB.ttc",
+    "/System/Library/Fonts/STHeiti Light.ttc",
+    "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
+]
+
+
+def _probe_duration(path: str) -> float:
+    """获取媒体时长（秒），失败返回 0"""
+    cmd = ["ffprobe", "-v", "quiet",
+           "-show_entries", "format=duration",
+           "-of", "default=noprint_wrappers=1:nokey=1", path]
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    if r.returncode != 0:
+        return 0.0
+    try:
+        return float(r.stdout.strip())
+    except ValueError:
+        return 0.0
+
+
+def _find_chinese_font() -> Optional[str]:
+    """找到第一个可用的中文字体文件"""
+    for f in _FONT_CANDIDATES:
+        if os.path.exists(f):
+            return f
+    return None
+
+
+def _escape_drawtext(text: str) -> str:
+    """转义 drawtext 滤镜的特殊字符"""
+    for ch in ("\\", ":", "'", "%", ",", "[", "]"):
+        text = text.replace(ch, f"\\{ch}")
+    return text
+
+
+def generate_cover(clip_path: str, title: str, output_path: str,
+                   config: dict) -> Optional[str]:
+    """
+    为切片生成竖屏封面：
+    提取切片 25% 处的高光帧 + 竖屏居中裁切 + 标题大字 + 头像角标
+
+    Args:
+        clip_path: 切片视频路径
+        title: 封面标题文字
+        output_path: 封面输出路径 (.jpg)
+        config: 配置字典
+
+    Returns:
+        成功返回输出路径，失败或关闭时返回 None
+    """
+    cv = config.get("cover", {})
+    if not cv.get("enabled", True):
+        return None
+
+    width = cv.get("width", 1080)
+    height = cv.get("height", 1920)
+    font_size = cv.get("font_size", 72)
+    title_y_ratio = cv.get("title_y_ratio", 0.10)
+
+    badge = cv.get("badge_image", "")
+    if badge and not os.path.isabs(badge):
+        badge = os.path.join(os.path.dirname(os.path.abspath(__file__)), badge)
+    use_badge = badge and os.path.exists(badge)
+
+    # 取切片 25% 处的帧（避开开头的淡入）
+    duration = _probe_duration(clip_path)
+    ts = max(1.0, duration * 0.25)
+
+    filters = [
+        f"scale={width}:{height}:force_original_aspect_ratio=increase",
+        f"crop={width}:{height}",
+    ]
+
+    font_file = _find_chinese_font()
+    if font_file and title:
+        safe_title = _escape_drawtext(title)
+        filters.append(
+            f"drawtext=fontfile={font_file}:text='{safe_title}':"
+            f"fontsize={font_size}:fontcolor=white:"
+            f"borderw=6:bordercolor=black@0.85:"
+            f"x=(w-text_w)/2:y=h*{title_y_ratio}"
+        )
+    elif not font_file:
+        logger.warning("未找到中文字体，封面将不含标题文字")
+
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+
+    if use_badge:
+        filter_complex = (
+            f"[0:v]{','.join(filters)}[base];"
+            f"[1:v]format=rgba[ovr];"
+            f"[base][ovr]overlay=20:(main_h-overlay_h-30)[vout]"
+        )
+        cmd = [
+            "ffmpeg", "-y",
+            "-ss", str(ts), "-i", clip_path,
+            "-i", badge,
+            "-frames:v", "1",
+            "-filter_complex", filter_complex,
+            "-map", "[vout]",
+            "-q:v", "2",
+            output_path,
+        ]
+    else:
+        cmd = [
+            "ffmpeg", "-y",
+            "-ss", str(ts), "-i", clip_path,
+            "-frames:v", "1",
+            "-vf", ",".join(filters),
+            "-q:v", "2",
+            output_path,
+        ]
+
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0 or not os.path.exists(output_path):
+        logger.warning(f"封面生成失败: {Path(output_path).name} "
+                        f"{result.stderr[-200:]}")
+        return None
+
+    logger.info(f"封面已生成: {Path(output_path).name}")
+    return output_path
+
+
+# ──────────────────────────────────────────────
 # 批量剪辑
 # ──────────────────────────────────────────────
 
@@ -401,6 +531,14 @@ def batch_clip(highlights: list, transcript_segments: list,
                     output_path=output_path,
                 )
                 result.clips.append(clip_info)
+
+                # 生成封面（可在 config.cover.enabled 关闭）
+                if config.get("cover", {}).get("enabled", True):
+                    cover_path = os.path.join(
+                        output_dir,
+                        f"{video_stem}_clip{clip_index:02d}_cover.jpg"
+                    )
+                    generate_cover(output_path, hl.title, cover_path, config)
             else:
                 result.failed.append(f"Clip {clip_index}: {hl.title}")
 

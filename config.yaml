@@ -10,8 +10,8 @@ paths:
 
 # === 转录引擎 ===
 transcription:
-  engine: "whisper"        # "whisper" (已安装) 或 "funasr" (需额外安装)
-  whisper_model: "medium"  # tiny / base / small / medium / large
+  engine: "funasr"         # "funasr" (Paraformer, 中文更准，推荐) / "whisper"
+  whisper_model: "medium"  # tiny / base / small / medium / large (仅 whisper 引擎使用)
   language: "zh"
   device: "cpu"            # cpu / cuda / mps (Apple Silicon)
 
@@ -25,6 +25,11 @@ highlight:
   min_clip_seconds: 15               # 最短切片时长
   max_clip_seconds: 180              # 最长切片时长（3分钟）
   audio_energy_weight: 0.3           # 音频能量在综合评分中的权重
+  # 弹幕热度信号 (可选，参考 hotclip): 填 B站 XML 格式弹幕文件路径
+  # 可通过录播姬 / DanmakuRender 等工具从直播录制中导出
+  # 仅在提供弹幕文件时生效，否则自动退化为 语义+能量 两路评分
+  danmaku_file: ""
+  danmaku_weight: 0.2                # 弹幕热度评分权重 (0 = 关闭)
 
 # === 剪辑 ===
 clipping:
@@ -36,6 +41,16 @@ clipping:
   video_crf: 20
   audio_codec: "aac"
   audio_bitrate: "128k"
+
+# === 封面生成 ===
+# 从每个切片中提取高光帧 + 标题大字 + 头像角标，输出竖屏封面
+cover:
+  enabled: true
+  width: 1080
+  height: 1920             # 竖屏封面 (抖音/视频号/小红书通用)
+  font_size: 72
+  title_y_ratio: 0.10      # 标题距画面顶部的高度比例
+  badge_image: "assets/profile_badge_overlay.png"  # 角标，留空则不叠加
 
 # === 字幕 ===
 subtitle:

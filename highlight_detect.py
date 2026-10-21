@@ -1,6 +1,6 @@
 """
 Xuke Clip Factory — AI 高光检测模块
-两阶段检测：LLM 语义分析 + 音频能量验证
+三阶段检测：LLM 语义分析 + 音频能量验证 + 弹幕热度信号(可选)
 """
 
 import os
@@ -31,6 +31,7 @@ class Highlight:
     category: str              # 分类: 金句 / 故事 / 互动 / 情感 / 争议 / 教学
     semantic_score: float      # 语义评分 (0-50)
     energy_score: float = 0.0  # 音频能量评分 (0-50)
+    danmaku_score: float = 0.0  # 弹幕热度评分 (0-50, 无弹幕数据时为0)
     total_score: float = 0.0   # 综合评分 (0-100, 加权)
     transcript_excerpt: str = ""  # 对应转录文本片段
 
@@ -352,37 +353,106 @@ def compute_audio_energy(audio_path: str, start: float, end: float,
         return 25.0  # 返回中性分数
 
 
+# ──────────────────────────────────────────────
+# 阶段二补充：弹幕热度信号 (可选，参考 hotclip)
+# ──────────────────────────────────────────────
+
+def parse_danmaku_file(danmaku_path: str) -> List[float]:
+    """
+    解析弹幕文件，返回弹幕时间戳列表（秒）
+    支持 B站 XML 格式 (<d p="time,...">text</d>)，这是目前的事实标准，
+    可通过录播姬、DanmakuRender 等工具从直播录制中导出
+    """
+    import xml.etree.ElementTree as ET
+
+    timestamps = []
+    try:
+        tree = ET.parse(danmaku_path)
+        for d in tree.iter("d"):
+            p = d.get("p", "")
+            first = p.split(",")[0] if p else ""
+            try:
+                timestamps.append(float(first))
+            except ValueError:
+                continue
+    except (ET.ParseError, OSError) as e:
+        logger.warning(f"弹幕文件解析失败: {e}")
+        return []
+
+    timestamps.sort()
+    logger.info(f"弹幕解析: {len(timestamps)} 条")
+    return timestamps
+
+
+def compute_danmaku_score(danmaku_times: List[float],
+                          start: float, end: float) -> float:
+    """
+    计算片段的弹幕热度得分 (0-50)
+    以片段内弹幕密度相对全片平均密度的倍数计分：
+    达到平均密度 = 25分，2倍 = 40分，4倍以上 = 50分封顶
+    """
+    if not danmaku_times:
+        return 0.0
+
+    total_span = danmaku_times[-1]
+    if total_span <= 0:
+        return 0.0
+
+    in_clip = sum(1 for t in danmaku_times if start <= t < end)
+    clip_density = in_clip / max(end - start, 1.0)
+    avg_density = len(danmaku_times) / total_span
+
+    if avg_density <= 0:
+        return 0.0
+
+    ratio = clip_density / avg_density
+    return min(10.0 + ratio * 10.0, 50.0)
+
+
 def validate_with_audio_energy(highlights: List[Highlight],
                                 audio_path: str,
-                                config: dict) -> List[Highlight]:
+                                config: dict,
+                                danmaku_times: Optional[List[float]] = None) -> List[Highlight]:
     """
-    阶段二：用音频能量验证和调整高光评分
+    阶段二：用音频能量 + 弹幕热度验证和调整高光评分
     """
     hc = config.get("highlight", {})
     energy_weight = hc.get("audio_energy_weight", 0.3)
-    semantic_weight = 1.0 - energy_weight
+    danmaku_weight = hc.get("danmaku_weight", 0.0)
 
-    logger.info(f"音频能量验证: {len(highlights)} 个片段 "
-                f"(语义权重={semantic_weight:.1f}, 能量权重={energy_weight:.1f})")
+    has_danmaku = bool(danmaku_times)
+    if not has_danmaku:
+        danmaku_weight = 0.0
+
+    semantic_weight = max(0.05, 1.0 - energy_weight - danmaku_weight)
+
+    logger.info(f"评分验证: {len(highlights)} 个片段 "
+                f"(语义权重={semantic_weight:.2f}, 能量权重={energy_weight:.2f}, "
+                f"弹幕权重={danmaku_weight:.2f}{'' if has_danmaku else ' [无弹幕数据]'})")
 
     for h in highlights:
         h.energy_score = compute_audio_energy(audio_path, h.start, h.end)
+        if has_danmaku:
+            h.danmaku_score = compute_danmaku_score(danmaku_times, h.start, h.end)
 
         # 综合评分：归一化到 0-100
         semantic_normalized = (h.semantic_score / 50.0) * 100
         energy_normalized = (h.energy_score / 50.0) * 100
+        danmaku_normalized = (h.danmaku_score / 50.0) * 100
         h.total_score = (
             semantic_normalized * semantic_weight +
-            energy_normalized * energy_weight
+            energy_normalized * energy_weight +
+            danmaku_normalized * danmaku_weight
         )
 
     # 按总分排序
     highlights.sort(key=lambda h: h.total_score, reverse=True)
 
     for i, h in enumerate(highlights):
+        score_detail = (f"语义={h.semantic_score:.0f}, 能量={h.energy_score:.1f}"
+                        + (f", 弹幕={h.danmaku_score:.1f}" if has_danmaku else ""))
         logger.info(f"  #{i+1} [{_format_time(h.start)}-{_format_time(h.end)}] "
-                     f"总分={h.total_score:.1f} (语义={h.semantic_score:.0f}, "
-                     f"能量={h.energy_score:.1f}) - {h.title}")
+                     f"总分={h.total_score:.1f} ({score_detail}) - {h.title}")
 
     return highlights
 
@@ -413,6 +483,7 @@ def merge_overlapping(highlights: List[Highlight],
                 category=last.category,
                 semantic_score=max(last.semantic_score, current.semantic_score),
                 energy_score=max(last.energy_score, current.energy_score),
+                danmaku_score=max(last.danmaku_score, current.danmaku_score),
                 total_score=max(last.total_score, current.total_score),
                 transcript_excerpt=last.transcript_excerpt + " " + current.transcript_excerpt,
             )
@@ -428,7 +499,8 @@ def merge_overlapping(highlights: List[Highlight],
 # ──────────────────────────────────────────────
 
 def detect_highlights(transcript_result, audio_path: str,
-                      config: dict) -> HighlightResult:
+                      config: dict,
+                      danmaku_file: Optional[str] = None) -> HighlightResult:
     """
     完整高光检测流程
     
@@ -436,6 +508,7 @@ def detect_highlights(transcript_result, audio_path: str,
         transcript_result: TranscriptResult 对象
         audio_path: 音频文件路径
         config: 配置字典
+        danmaku_file: 弹幕文件路径（可选，B站 XML 格式）
     
     Returns:
         HighlightResult
@@ -457,8 +530,14 @@ def detect_highlights(transcript_result, audio_path: str,
             total_analyzed_minutes=transcript_result.duration_seconds / 60,
         )
 
-    # 阶段二：音频能量验证
-    highlights = validate_with_audio_energy(highlights, audio_path, config)
+    # 可选：解析弹幕文件
+    danmaku_times = []
+    if danmaku_file and os.path.exists(danmaku_file):
+        danmaku_times = parse_danmaku_file(danmaku_file)
+
+    # 阶段二：音频能量 + 弹幕热度验证
+    highlights = validate_with_audio_energy(highlights, audio_path, config,
+                                            danmaku_times=danmaku_times)
 
     # 合并重叠
     highlights = merge_overlapping(highlights)

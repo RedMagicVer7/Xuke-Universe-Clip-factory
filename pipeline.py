@@ -177,8 +177,12 @@ def run_pipeline(video_path: str, config: dict,
 
                 # 提取音频用于能量分析
                 audio_path = extract_audio(video_path)
+
+                # 可选弹幕热度文件 (B站 XML 格式, 见 config.highlight.danmaku_file)
+                danmaku_file = config.get("highlight", {}).get("danmaku_file", "")
                 highlights_result = detect_highlights(
-                    transcript_result, audio_path, config
+                    transcript_result, audio_path, config,
+                    danmaku_file=danmaku_file or None,
                 )
 
                 out_path = os.path.join(state.output_dir, "highlights.json")
